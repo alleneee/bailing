@@ -1,14 +1,15 @@
-from langchain.embeddings import HuggingFaceBgeEmbeddings
-from langchain.vectorstores import FAISS
+from langchain_community.embeddings import HuggingFaceBgeEmbeddings
+from langchain_community.vectorstores import FAISS
 from langchain_chroma import Chroma
-from langchain.document_loaders import DirectoryLoader, TextLoader
+from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_core.prompts import PromptTemplate
-
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_openai import ChatOpenAI
+import requests
+import logging
 
+logger = logging.getLogger(__name__)
 
 prompt_template = """请根据以下上下文回答最后的问题。如果你不知道答案，请直接说不知道，切勿编造答案。回答应简洁明了，最多使用三句话，确保直接针对问题，并鼓励提问者提出更多问题。
 
@@ -17,6 +18,37 @@ prompt_template = """请根据以下上下文回答最后的问题。如果你�
 问题：{question}
 
 有帮助的答案："""
+
+class DifyLLMWrapper:
+    def __init__(self, api_key, endpoint):
+        self.api_key = api_key
+        self.endpoint = endpoint
+        self.headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+
+    def __call__(self, prompt):
+        try:
+            response = requests.post(
+                f"{self.endpoint}/chat-messages",
+                headers=self.headers,
+                json={
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False
+                }
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                return result.get("answer", "")
+            else:
+                logger.error(f"Dify API请求失败: {response.status_code} - {response.text}")
+                return ""
+                
+        except Exception as e:
+            logger.error(f"调用Dify API时出错: {e}")
+            return ""
 
 class Rag:
     _instance = None
@@ -29,46 +61,40 @@ class Rag:
 
     def init(self, config: dict):
         self.doc_path = config.get("doc_path")
-        self.emb_model = config.get("emb_model")
-        self.template = prompt_template
-        self.custom_rag_prompt = PromptTemplate.from_template(self.template)
-        self.llm = ChatOpenAI(model=config.get("model_name")
-                              , base_url=config.get("base_url"), api_key=config.get("api_key"))
-        # 定义加载器，支持不同文档类型
-        loader = DirectoryLoader(
-            self.doc_path,
-            glob="**/*.md",
-            loader_cls= TextLoader
-        )
-        documents = loader.load()
-
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-        splits = text_splitter.split_documents(documents)
-
-        model_kwargs = {'device': 'cpu'}
-        encode_kwargs = {'normalize_embeddings': True}
-        embedding_model = HuggingFaceBgeEmbeddings(model_name=self.emb_model
-                                                   , model_kwargs=model_kwargs
-                                                   , encode_kwargs=encode_kwargs)
-
-        #embeddings = embedding_model.embed_documents([doc.content for doc in documents])
-        #vector_store = FAISS.from_embeddings(documents=splits, embedding=embeddings)
-        vector_store = Chroma.from_decuments(documents=splits, embedding=embedding_model)
-        retriever = vector_store.as_retriever()
-
-        def format_docs(docs):
-            return "\n\n".join(doc.page_content for doc in docs)
-
-        self.rag_chain = (
-                {"context": retriever | format_docs, "question": RunnablePassthrough()}
-                | self.custom_rag_prompt
-                | self.llm
-                | StrOutputParser()
-        )
+        
+        # 使用Dify配置
+        dify_config = config.get("dify", {})
+        self.api_key = dify_config.get("api_key")
+        self.endpoint = dify_config.get("endpoint", "https://api.dify.ai/v1")
+        
+        # 设置API请求头
+        self.headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
 
     def query(self, query):
-        result = self.rag_chain.invoke(query)
-        return f"帮你找到: {query} 相关的信息，" + str(result)
+        try:
+            # 使用Dify的Chat Completion API
+            response = requests.post(
+                f"{self.endpoint}/chat-messages",
+                headers=self.headers,
+                json={
+                    "messages": [{"role": "user", "content": query}],
+                    "stream": False
+                }
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                return result.get("answer", "")
+            else:
+                logger.error(f"Dify API请求失败: {response.status_code} - {response.text}")
+                return ""
+                
+        except Exception as e:
+            logger.error(f"调用Dify API时出错: {e}")
+            return ""
 
 
 if __name__ == "__main__":

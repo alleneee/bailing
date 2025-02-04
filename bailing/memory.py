@@ -3,8 +3,7 @@ import os
 import glob
 import logging
 import re
-
-import openai
+import requests
 
 from bailing.utils import read_json_file, write_json_file
 
@@ -35,15 +34,19 @@ class Memory:
         else:
             self.memory = {"history_memory_file":[], "memory":""}
 
-        self.model_name = config.get("model_name")
-        self.api_key = config.get("api_key")
-        self.base_url = config.get("url")
-        self.client = openai.OpenAI(api_key=self.api_key, base_url=self.base_url)
+        # 使用Dify配置
+        dify_config = config.get("dify", {})
+        self.api_key = dify_config.get("api_key")
+        self.endpoint = dify_config.get("endpoint", "https://api.dify.ai/v1")
+        
+        # 设置API请求头
+        self.headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
 
         self.read_dialogues_in_order(file_path)
-
         write_json_file(self.memory_file, self.memory)
-
 
     def get_memory(self):
         return self.memory["memory"]
@@ -51,19 +54,29 @@ class Memory:
     def update_memory(self, file_name, dialogue_history):
         memory_prompt = memory_prompt_template.replace("${dialogue_abstract}", self.memory["memory"])\
             .replace("${dialogue_history}", dialogue_history).strip()
-        new_memory = None
+        
         try:
-            responses = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=[{"role":"user", "content":memory_prompt}],
-                stream=False
+            # 使用Dify的Chat Completion API
+            response = requests.post(
+                f"{self.endpoint}/chat-messages",
+                headers=self.headers,
+                json={
+                    "messages": [{"role": "user", "content": memory_prompt}],
+                    "stream": False
+                }
             )
-            new_memory = responses.choices[0].message.content
+            
+            if response.status_code == 200:
+                result = response.json()
+                new_memory = result.get("answer", "")
+                if new_memory:
+                    self.memory["history_memory_file"].append(file_name)
+                    self.memory["memory"] = new_memory
+            else:
+                logger.error(f"Dify API请求失败: {response.status_code} - {response.text}")
+                
         except Exception as e:
-            logger.error(f"Error in response generation: {e}")
-        if new_memory is not None:
-            self.memory["history_memory_file"].append(file_name)
-            self.memory["memory"] = new_memory
+            logger.error(f"更新记忆时出错: {e}")
 
     @staticmethod
     def extract_time_from_filename(filename):
@@ -102,7 +115,6 @@ class Memory:
         files = glob.glob(pattern)
 
         # 按时间排序
-        #files.sort(key=lambda x: x.split('-')[1:4])  # 根据时间部分进行排序
         files.sort(key=lambda x: self.extract_time_from_filename(os.path.basename(x)))
 
         # 读取并打印所有对话

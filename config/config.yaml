@@ -4,8 +4,12 @@ version: 1.0
 logging:
   level: debug
 
-# 唤醒词
-WakeWord: 百聆
+# 唤醒词列表
+WakeWords: 
+  - "百聆"
+  - "小聆"
+  - "你好百聆"
+  - "嘿百聆"
 
 interrupt: false
 # 是否开启工具调用
@@ -15,30 +19,44 @@ selected_module:
   Recorder: RecorderPyAudio
   ASR: FunASR
   VAD: SileroVAD
-  LLM: OpenAILLM
+  LLM: DifyLLM
   TTS: EdgeTTS
   Player: PygameSoundPlayer
 
 Recorder:
   RecorderPyAudio:
     output_file: tmp/
+    chunk: 512
+    channels: 1
+    rate: 16000
 
 ASR:
   FunASR:
-    model_dir: models/SenseVoiceSmall
+    model_dir: /Users/niko/.cache/modelscope/hub/SenseVoiceSmall
     output_file: tmp/
+    use_streaming: true  # 启用流式处理
+    language: "auto"  # 语言选项: "zn", "en", "yue", "ja", "ko", "nospeech"
+    batch_size: 60  # 批处理大小
+    max_cache_size: 100  # 缓存大小限制
+    max_segment_time: 30000  # 最大语音片段时长(ms)
+    min_duration_on: 200  # 最小语音持续时间(ms)
+    min_duration_off: 200  # 最小静音持续时间(ms)
 
 VAD:
   SileroVAD:
     sampling_rate: 16000
     threshold: 0.5
-    min_silence_duration_ms: 200  # 如果说话停顿比较长，可以把这个值设置大一些
+    min_silence_duration_ms: 500  # 增加静音持续时间
+    channels: 1
+    use_streaming: true
+    speech_prob_threshold: 0.5
+    min_speech_duration_ms: 300  # 增加最小语音持续时间
+    window_size_samples: 512  # 处理窗口大小
 
 LLM:
-  OpenAILLM:
-    model_name: deepseek-chat
-    url: https://api.deepseek.com
-    api_key:
+  DifyLLM:
+    api_key: app-ETj32anudzJTI01qLQJoE8H5  # Dify API Key
+    endpoint: http://localhost/v1  # Dify API 端点
 
 TTS:
   MacTTS:
@@ -47,6 +65,25 @@ TTS:
   EdgeTTS:
     voice: zh-CN-XiaoxiaoNeural
     output_file: tmp/
+    stream_mode: true  # 启用流式输出
+    chunk_size: 4096   # 流式输出的块大小
+  MinimaxTTS:
+    output_file: tmp/
+    api_key: ""  # 你的海螺API密钥
+    group_id: ""  # 你的海螺Group ID
+    model: "speech-01-turbo"  # 可选: speech-01-turbo, speech-01-240228, speech-01-turbo-240228
+    stream_mode: true  # 是否使用流式输出
+    voice_id: "male-qn-qingse"  # 音色ID
+    # 音频设置
+    sample_rate: 32000
+    bitrate: 128000
+    format: "mp3"
+    channel: 1
+    # 语音设置
+    speed: 1.0  # 语速
+    vol: 1.0  # 音量
+    pitch: 0  # 音调
+    emotion: "normal"  # 情感
   GTTS:
     lang: zh
     output_file: tmp/
@@ -63,17 +100,16 @@ Player:
 
 Rag:
   doc_path: documents/
-  emb_model: models/bge-small-zh
-  model_name: deepseek-chat
-  url: https://api.deepseek.com
-  api_key: null
+  dify:
+    api_key: app-ETj32anudzJTI01qLQJoE8H5
+    endpoint: http://localhost/v1
 
 Memory:
   dialogue_history_path: tmp/
   memory_file: tmp/memory.json
-  model_name: deepseek-chat
-  url: https://api.deepseek.com
-  api_key: null
+  dify:
+    api_key: app-ETj32anudzJTI01qLQJoE8H5
+    endpoint: http://localhost/v1
 
 TaskManager:
   functions_call_name: plugins/function_calls_config.json

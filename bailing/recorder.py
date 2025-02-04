@@ -19,57 +19,53 @@ class AbstractRecorder(ABC):
 
 
 class RecorderPyAudio(AbstractRecorder):
-    def __init__(self, config):
-        self.format = pyaudio.paInt16
-        self.channels = 1
-        self.rate = 16000
-        self.chunk = 512  # Buffer size
-        self.py_audio = pyaudio.PyAudio()
+    def __init__(self, config=None):
+        self.CHUNK = 480  # 减小缓冲区大小，提高响应速度
+        self.FORMAT = pyaudio.paInt16
+        self.CHANNELS = 1
+        self.RATE = 16000
+        self.recording = False
+        self.frames = []
+        self.p = None
         self.stream = None
-        self.thread = None
-        self.running = False
+        if config:
+            self.CHUNK = config.get('chunk', self.CHUNK)
+            self.CHANNELS = config.get('channels', self.CHANNELS)
+            self.RATE = config.get('rate', self.RATE)
 
     def start_recording(self, audio_queue: queue.Queue):
-        if self.running:
-            raise RuntimeError("Stream already running")
+        """开始录音"""
+        self.recording = True
+        self.p = pyaudio.PyAudio()
         
-        def stream_thread():
-            try:
-                self.stream = self.py_audio.open(
-                    format=self.format,
-                    channels=self.channels,
-                    rate=self.rate,
-                    input=True,
-                    frames_per_buffer=self.chunk
-                )
-                self.running = True
-                while self.running:
-                    data = self.stream.read(self.chunk, exception_on_overflow=False)
-                    audio_queue.put(data)
-            except Exception as e:
-                logger.error(f"Error in stream: {e}")
-            finally:
-                self.stop_recording()
+        def callback(in_data, frame_count, time_info, status):
+            if self.recording:
+                audio_queue.put(in_data)
+            return (in_data, pyaudio.paContinue)
 
-        self.thread = threading.Thread(target=stream_thread)
-        self.thread.start()
+        # 使用回调方式实现流式处理
+        self.stream = self.p.open(
+            format=self.FORMAT,
+            channels=self.CHANNELS,
+            rate=self.RATE,
+            input=True,
+            frames_per_buffer=self.CHUNK,
+            stream_callback=callback
+        )
+        
+        self.stream.start_stream()
+        logger.info("开始录音...")
 
     def stop_recording(self):
-        if not self.running:
-            return
-        
-        self.running = False
-        if self.stream:
-            self.stream.stop_stream()
-            self.stream.close()
-            self.stream = None
-        
-        if self.py_audio:
-            self.py_audio.terminate()
-
-        if self.thread:
-            self.thread.join()
-            self.thread = None
+        """停止录音"""
+        if self.recording:
+            self.recording = False
+            if self.stream:
+                self.stream.stop_stream()
+                self.stream.close()
+            if self.p:
+                self.p.terminate()
+            logger.info("录音已停止。")
 
     def __del__(self):
         # Ensure resources are cleaned up on object deletion

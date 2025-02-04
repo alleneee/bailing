@@ -12,7 +12,7 @@ from bailing import (
     recorder,
     player,
     asr,
-    llm,
+    dify,
     tts,
     vad,
     memory,
@@ -53,9 +53,11 @@ class Robot(ABC):
             config["ASR"][config["selected_module"]["ASR"]]
         )
 
-        self.llm = llm.create_instance(
-            config["selected_module"]["LLM"],
-            config["LLM"][config["selected_module"]["LLM"]]
+        # 初始化 DifyLLM
+        llm_config = config["LLM"][config["selected_module"]["LLM"]]
+        self.llm = dify.DifyLLM(
+            api_key=llm_config.get("api_key"),
+            endpoint=llm_config.get("endpoint", "https://api.dify.ai/v1")
         )
 
         self.tts = tts.create_instance(
@@ -107,6 +109,11 @@ class Robot(ABC):
         self.task_queue = queue.Queue()
         self.task_manager = TaskManager(config.get("TaskManager"), self.task_queue)
         self.start_task_mode = config.get("StartTaskMode")
+
+        # 语音唤醒相关配置
+        self.silence_status = False
+        self.start_time = 0
+        self.wake_words = config.get("WakeWords", [])
 
     def listen_dialogue(self, callback):
         self.callback = callback
@@ -175,19 +182,28 @@ class Robot(ABC):
             self.speech.append(data)
         vad_status = data.get("vad_statue")
         # 空闲的时候，取出耗时任务进行播放
-        if not self.task_queue.empty() and  not self.vad_start and vad_status is None \
+        if not self.task_queue.empty() and not self.vad_start and vad_status is None \
                 and not self.player.get_playing_status() and self.chat_lock is False:
             result = self.task_queue.get()
             future = self.executor.submit(self.speak_and_play, result.response)
             self.tts_queue.put(future)
 
-        """ 语音唤醒
-        if time.time() - self.start_time>=60:
+        # 语音唤醒处理
+        if time.time() - self.start_time >= 60:
             self.silence_status = True
 
+        text = ""  # 初始化text变量
         if self.silence_status:
+            # 检查是否包含唤醒词
+            if text and any(wake_word in text.lower() for wake_word in self.wake_words):
+                logger.info("检测到唤醒词，开始监听...")
+                self.silence_status = False
+                self.start_time = time.time()
+                # 播放唤醒提示音
+                future = self.executor.submit(self.speak_and_play, "我在听")
+                self.tts_queue.put(future)
             return
-        """
+
         if vad_status is None:
             return
         if "start" in vad_status:
@@ -209,6 +225,17 @@ class Robot(ABC):
                 voice_data = [d["voice"] for d in self.speech]
                 text, tmpfile = self.asr.recognizer(voice_data)
                 self.speech = []
+                
+                # 检查唤醒词
+                if self.silence_status and text and any(wake_word in text.lower() for wake_word in self.wake_words):
+                    logger.info("检测到唤醒词，开始监听...")
+                    self.silence_status = False
+                    self.start_time = time.time()
+                    # 播放唤醒提示音
+                    future = self.executor.submit(self.speak_and_play, "我在听")
+                    self.tts_queue.put(future)
+                    return
+                
             except Exception as e:
                 self.vad_start = False
                 self.speech = []
