@@ -175,8 +175,11 @@ class Robot(ABC):
         self._tts_priority()
 
     def _duplex(self):
-        # 处理识别结果
-        data = self.vad_queue.get()
+        try:
+            data = self.vad_queue.get(timeout=0.1)  # 100ms timeout
+        except queue.Empty:
+            return False  # No data available, continue loop
+        
         # 识别到vad开始
         if self.vad_start:
             self.speech.append(data)
